@@ -4,6 +4,14 @@ A real-time geospatial news aggregator that plots news articles on an interactiv
 
 ## Running the frontend
 
+1. Copy `.env.example` to `.env` and fill in your Mapbox token (free at https://mapbox.com)
+
+```bash
+cp .env.example .env
+```
+
+2. Install dependencies and start the dev server
+
 ```bash
 cd frontend
 npm install
