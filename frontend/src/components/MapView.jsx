@@ -1,6 +1,6 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import mapboxgl from 'mapbox-gl'
-import { MOCK_ARTICLES } from '../api/mockArticles'
+import { fetchMapArticles } from '../api/newsApi'
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN
 
@@ -16,7 +16,6 @@ const CAT_COLORS = {
 }
 
 function toGeoJSON(articles) {
-  // Group articles at the same location into one feature
   const groups = {}
   articles.forEach(a => {
     if (a.lat == null || a.lng == null) return
@@ -39,11 +38,30 @@ function toGeoJSON(articles) {
   }
 }
 
+function getBbox(map) {
+  const b = map.getBounds()
+  return `${b.getSouth()},${b.getWest()},${b.getNorth()},${b.getEast()}`
+}
+
 export default function MapView({ category, onArticleClick }) {
   const containerRef = useRef(null)
   const mapRef = useRef(null)
   const onArticleClickRef = useRef(onArticleClick)
   onArticleClickRef.current = onArticleClick
+
+  // Fetch articles from API and update the map source
+  const loadArticles = async (map) => {
+    try {
+      const bbox = getBbox(map)
+      const articles = await fetchMapArticles({ bbox, category: category || 'all' })
+      const source = map.getSource('articles')
+      if (source) {
+        source.setData(toGeoJSON(articles))
+      }
+    } catch (err) {
+      console.error('Failed to load articles:', err)
+    }
+  }
 
   useEffect(() => {
     const map = new mapboxgl.Map({
@@ -62,14 +80,9 @@ export default function MapView({ category, onArticleClick }) {
         'horizon-blend': 0.04,
       })
 
-      // Filter articles by category if one is selected
-      const filtered = category
-        ? MOCK_ARTICLES.filter(a => a.category === category)
-        : MOCK_ARTICLES
-
       map.addSource('articles', {
         type: 'geojson',
-        data: toGeoJSON(filtered),
+        data: { type: 'FeatureCollection', features: [] },
       })
 
       // Soft glow halo
@@ -121,12 +134,21 @@ export default function MapView({ category, onArticleClick }) {
       })
       map.on('mouseenter', 'articles-dot', () => { map.getCanvas().style.cursor = 'pointer' })
       map.on('mouseleave', 'articles-dot', () => { map.getCanvas().style.cursor = '' })
+
+      // Initial load + reload on pan/zoom
+      loadArticles(map)
+      map.on('moveend', () => loadArticles(map))
     })
 
     map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), 'bottom-right')
 
     return () => map.remove()
-  }, [category])  // re-render when category filter changes
+  }, [])
+
+  // Re-fetch when category filter changes
+  useEffect(() => {
+    if (mapRef.current) loadArticles(mapRef.current)
+  }, [category])
 
   return (
     <>

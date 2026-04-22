@@ -1,0 +1,335 @@
+# ============================================================
+# GeoNews — GitHub Actions CI/CD
+#
+# DISABLED from auto-run: trigger is workflow_dispatch only.
+# To enable on push, change the `on:` block to:
+#   on:
+#     push:
+#       branches: [main]
+#
+# Required GitHub Secrets (Settings → Secrets → Actions):
+#   GCP_SA_KEY   — GCP service account JSON key with roles:
+#                    - roles/run.admin
+#                    - roles/artifactregistry.writer
+#                    - roles/iam.serviceAccountUser
+#   GCP_PROJECT  — your GCP project ID  (e.g. my-gcp-project)
+#
+# Required GitHub Variables (Settings → Variables → Actions):
+#   GCP_REGION   — Cloud Run region     (e.g. us-central1)
+#   GCP_REGISTRY — Artifact Registry URL
+#                  (e.g. us-central1-docker.pkg.dev/my-project/geonews)
+# ============================================================
+
+name: Deploy GeoNews
+
+on:
+  workflow_dispatch:   # manual trigger only
+
+env:
+  REGISTRY: ${{ vars.GCP_REGISTRY }}
+  REGION:   ${{ vars.GCP_REGION }}
+  PROJECT:  ${{ secrets.GCP_PROJECT }}
+
+jobs:
+
+  # ── Detect which services changed ──────────────────────────────────────────
+  detect-changes:
+    name: Detect changed services
+    runs-on: ubuntu-latest
+    outputs:
+      poller:        ${{ steps.diff.outputs.poller }}
+      upload:        ${{ steps.diff.outputs.upload }}
+      summarizer:    ${{ steps.diff.outputs.summarizer }}
+      classifier:    ${{ steps.diff.outputs.classifier }}
+      translator:    ${{ steps.diff.outputs.translator }}
+      aggregator:    ${{ steps.diff.outputs.aggregator }}
+      like-consumer: ${{ steps.diff.outputs.like-consumer }}
+      api:           ${{ steps.diff.outputs.api }}
+      websocket:     ${{ steps.diff.outputs.websocket }}
+      workers:       ${{ steps.diff.outputs.workers }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Compute changed services
+        id: diff
+        run: |
+          SERVICES="poller upload summarizer classifier translator aggregator like-consumer api websocket workers"
+
+          if ! CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null) || [ -z "$CHANGED" ]; then
+            echo "No diff available — marking all services changed"
+            for svc in $SERVICES; do echo "$svc=true" >> $GITHUB_OUTPUT; done
+            exit 0
+          fi
+
+          echo "Changed files: $CHANGED"
+
+          # If shared/ changed, rebuild every service
+          if echo "$CHANGED" | grep -q "^shared/"; then
+            echo "shared/ changed — rebuilding all"
+            for svc in $SERVICES; do echo "$svc=true" >> $GITHUB_OUTPUT; done
+            exit 0
+          fi
+
+          for svc in $SERVICES; do
+            if echo "$CHANGED" | grep -q "^services/$svc/"; then
+              echo "$svc=true"  >> $GITHUB_OUTPUT
+            else
+              echo "$svc=false" >> $GITHUB_OUTPUT
+            fi
+          done
+
+  # ── Deploy jobs (parallel, each gated by its changed flag) ─────────────────
+
+  deploy-poller:
+    name: Deploy poller
+    needs: detect-changes
+    if: needs.detect-changes.outputs.poller == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - run: gcloud auth configure-docker ${{ vars.GCP_REGION }}-docker.pkg.dev --quiet
+      - name: Build & push
+        run: |
+          docker build -f services/poller/Dockerfile \
+            -t $REGISTRY/poller:${{ github.sha }} -t $REGISTRY/poller:latest .
+          docker push $REGISTRY/poller:${{ github.sha }}
+          docker push $REGISTRY/poller:latest
+      - name: Deploy
+        run: |
+          gcloud run deploy geonews-poller \
+            --image $REGISTRY/poller:${{ github.sha }} \
+            --region $REGION --platform managed --no-allow-unauthenticated
+
+  deploy-upload:
+    name: Deploy upload
+    needs: detect-changes
+    if: needs.detect-changes.outputs.upload == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - run: gcloud auth configure-docker ${{ vars.GCP_REGION }}-docker.pkg.dev --quiet
+      - name: Build & push
+        run: |
+          docker build -f services/upload/Dockerfile \
+            -t $REGISTRY/upload:${{ github.sha }} -t $REGISTRY/upload:latest .
+          docker push $REGISTRY/upload:${{ github.sha }}
+          docker push $REGISTRY/upload:latest
+      - name: Deploy
+        run: |
+          gcloud run deploy geonews-upload \
+            --image $REGISTRY/upload:${{ github.sha }} \
+            --region $REGION --platform managed --allow-unauthenticated
+
+  deploy-summarizer:
+    name: Deploy summarizer
+    needs: detect-changes
+    if: needs.detect-changes.outputs.summarizer == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - run: gcloud auth configure-docker ${{ vars.GCP_REGION }}-docker.pkg.dev --quiet
+      - name: Build & push
+        run: |
+          docker build -f services/summarizer/Dockerfile \
+            -t $REGISTRY/summarizer:${{ github.sha }} -t $REGISTRY/summarizer:latest .
+          docker push $REGISTRY/summarizer:${{ github.sha }}
+          docker push $REGISTRY/summarizer:latest
+      - name: Deploy
+        run: |
+          gcloud run deploy geonews-summarizer \
+            --image $REGISTRY/summarizer:${{ github.sha }} \
+            --region $REGION --platform managed --no-allow-unauthenticated \
+            --min-instances 1 --max-instances 10
+
+  deploy-classifier:
+    name: Deploy classifier
+    needs: detect-changes
+    if: needs.detect-changes.outputs.classifier == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - run: gcloud auth configure-docker ${{ vars.GCP_REGION }}-docker.pkg.dev --quiet
+      - name: Build & push
+        run: |
+          docker build -f services/classifier/Dockerfile \
+            -t $REGISTRY/classifier:${{ github.sha }} -t $REGISTRY/classifier:latest .
+          docker push $REGISTRY/classifier:${{ github.sha }}
+          docker push $REGISTRY/classifier:latest
+      - name: Deploy
+        run: |
+          gcloud run deploy geonews-classifier \
+            --image $REGISTRY/classifier:${{ github.sha }} \
+            --region $REGION --platform managed --no-allow-unauthenticated \
+            --min-instances 1 --max-instances 10
+
+  deploy-translator:
+    name: Deploy translator
+    needs: detect-changes
+    if: needs.detect-changes.outputs.translator == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - run: gcloud auth configure-docker ${{ vars.GCP_REGION }}-docker.pkg.dev --quiet
+      - name: Build & push
+        run: |
+          docker build -f services/translator/Dockerfile \
+            -t $REGISTRY/translator:${{ github.sha }} -t $REGISTRY/translator:latest .
+          docker push $REGISTRY/translator:${{ github.sha }}
+          docker push $REGISTRY/translator:latest
+      - name: Deploy
+        run: |
+          gcloud run deploy geonews-translator \
+            --image $REGISTRY/translator:${{ github.sha }} \
+            --region $REGION --platform managed --no-allow-unauthenticated \
+            --min-instances 1 --max-instances 10 --memory 2Gi --cpu 2
+
+  deploy-aggregator:
+    name: Deploy aggregator
+    needs: detect-changes
+    if: needs.detect-changes.outputs.aggregator == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - run: gcloud auth configure-docker ${{ vars.GCP_REGION }}-docker.pkg.dev --quiet
+      - name: Build & push
+        run: |
+          docker build -f services/aggregator/Dockerfile \
+            -t $REGISTRY/aggregator:${{ github.sha }} -t $REGISTRY/aggregator:latest .
+          docker push $REGISTRY/aggregator:${{ github.sha }}
+          docker push $REGISTRY/aggregator:latest
+      - name: Deploy
+        run: |
+          gcloud run deploy geonews-aggregator \
+            --image $REGISTRY/aggregator:${{ github.sha }} \
+            --region $REGION --platform managed --no-allow-unauthenticated \
+            --min-instances 1 --max-instances 5
+
+  deploy-like-consumer:
+    name: Deploy like-consumer
+    needs: detect-changes
+    if: needs.detect-changes.outputs.like-consumer == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - run: gcloud auth configure-docker ${{ vars.GCP_REGION }}-docker.pkg.dev --quiet
+      - name: Build & push
+        run: |
+          docker build -f services/like-consumer/Dockerfile \
+            -t $REGISTRY/like-consumer:${{ github.sha }} -t $REGISTRY/like-consumer:latest .
+          docker push $REGISTRY/like-consumer:${{ github.sha }}
+          docker push $REGISTRY/like-consumer:latest
+      - name: Deploy
+        run: |
+          gcloud run deploy geonews-like-consumer \
+            --image $REGISTRY/like-consumer:${{ github.sha }} \
+            --region $REGION --platform managed --no-allow-unauthenticated \
+            --min-instances 1 --max-instances 5
+
+  deploy-api:
+    name: Deploy api
+    needs: detect-changes
+    if: needs.detect-changes.outputs.api == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - run: gcloud auth configure-docker ${{ vars.GCP_REGION }}-docker.pkg.dev --quiet
+      - name: Build & push
+        run: |
+          docker build -f services/api/Dockerfile \
+            -t $REGISTRY/api:${{ github.sha }} -t $REGISTRY/api:latest .
+          docker push $REGISTRY/api:${{ github.sha }}
+          docker push $REGISTRY/api:latest
+      - name: Deploy
+        run: |
+          gcloud run deploy geonews-api \
+            --image $REGISTRY/api:${{ github.sha }} \
+            --region $REGION --platform managed --allow-unauthenticated \
+            --min-instances 1 --max-instances 20 --concurrency 100 \
+            --set-env-vars PROJECT_ID=$PROJECT
+
+  deploy-websocket:
+    name: Deploy websocket
+    needs: detect-changes
+    if: needs.detect-changes.outputs.websocket == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - run: gcloud auth configure-docker ${{ vars.GCP_REGION }}-docker.pkg.dev --quiet
+      - name: Build & push
+        run: |
+          docker build -f services/websocket/Dockerfile \
+            -t $REGISTRY/websocket:${{ github.sha }} -t $REGISTRY/websocket:latest .
+          docker push $REGISTRY/websocket:${{ github.sha }}
+          docker push $REGISTRY/websocket:latest
+      - name: Deploy
+        run: |
+          gcloud run deploy geonews-websocket \
+            --image $REGISTRY/websocket:${{ github.sha }} \
+            --region $REGION --platform managed --allow-unauthenticated \
+            --min-instances 1 --max-instances 10 --session-affinity
+
+  deploy-workers:
+    name: Deploy workers
+    needs: detect-changes
+    if: needs.detect-changes.outputs.workers == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - run: gcloud auth configure-docker ${{ vars.GCP_REGION }}-docker.pkg.dev --quiet
+      - name: Build & push
+        run: |
+          docker build -f services/workers/Dockerfile \
+            -t $REGISTRY/workers:${{ github.sha }} -t $REGISTRY/workers:latest .
+          docker push $REGISTRY/workers:${{ github.sha }}
+          docker push $REGISTRY/workers:latest
+      - name: Deploy
+        run: |
+          for w in score-worker flush-worker heatmap-worker dlq-retry-worker; do
+            gcloud run deploy geonews-$w \
+              --image $REGISTRY/workers:${{ github.sha }} \
+              --region $REGION --platform managed --no-allow-unauthenticated \
+              --min-instances 0 --max-instances 2
+          done
