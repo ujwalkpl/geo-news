@@ -432,3 +432,38 @@ jobs:
             --add-cloudsql-instances $SQL_INST \
             --command=python --args="dlq_retry_worker.py" \
             --set-secrets="POSTGRES_URL=POSTGRES_URL:latest,REDIS_URL=REDIS_URL:latest,KAFKA_BOOTSTRAP_SERVERS=KAFKA_BOOTSTRAP_SERVERS:latest"
+
+  # ── frontend — Vite build → GCS static hosting ──────────────────────────────
+  deploy-frontend:
+    name: Deploy frontend
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: |
+      needs.detect-changes.outputs.poller == 'true' ||
+      contains(github.event.head_commit.message, 'frontend') ||
+      github.event.inputs.force_deploy == 'true' ||
+      contains(join(github.event.commits.*.modified, ','), 'frontend/')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Build
+        working-directory: frontend
+        env:
+          VITE_API_URL: https://geonews-api-4loazyhcxa-uc.a.run.app
+          VITE_WS_URL:  wss://geonews-websocket-4loazyhcxa-uc.a.run.app/ws
+          VITE_MAPBOX_TOKEN: ${{ secrets.MAPBOX_TOKEN }}
+        run: npm ci && npm run build
+      - name: Upload to GCS
+        run: |
+          BUCKET=lab2-485303-geonews-frontend
+          gsutil -h "Cache-Control:no-cache,no-store" cp \
+            frontend/dist/index.html gs://$BUCKET/index.html
+          gsutil -h "Cache-Control:public,max-age=31536000,immutable" -m cp -r \
+            frontend/dist/assets gs://$BUCKET/
+          echo "Frontend live: https://storage.googleapis.com/$BUCKET/index.html"
