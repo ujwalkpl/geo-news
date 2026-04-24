@@ -1,17 +1,36 @@
 import { useState, useCallback } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { List, Globe, Plus } from 'lucide-react'
+import { List, Globe, Plus, User, LogOut } from 'lucide-react'
 import MapView from './components/MapView'
 import SnapViewer from './components/SnapViewer'
 import CategoryBar from './components/CategoryBar'
 import FeedDrawer from './components/FeedDrawer'
 import UploadModal from './components/UploadModal'
+import AuthModal from './components/AuthModal'
+import { logout } from './api/auth'
+
+function getStoredToken() {
+  try { return localStorage.getItem('geonews_token') } catch { return null }
+}
 
 export default function App() {
   const [category, setCategory] = useState('All')
   const [snapArticles, setSnapArticles] = useState(null)
   const [feedOpen, setFeedOpen] = useState(false)
   const [uploadOpen, setUploadOpen] = useState(false)
+  const [authOpen, setAuthOpen] = useState(false)
+  const [token, setToken] = useState(getStoredToken)
+
+  const handleAuth = (accessToken) => {
+    setToken(accessToken)
+    try { localStorage.setItem('geonews_token', accessToken) } catch {}
+  }
+
+  const handleLogout = async () => {
+    await logout(token)
+    setToken(null)
+    try { localStorage.removeItem('geonews_token') } catch {}
+  }
 
   const handleArticleClick = useCallback((articles) => {
     setFeedOpen(false)
@@ -38,6 +57,39 @@ export default function App() {
         <span style={{ color: '#fff', fontWeight: 800, fontSize: 16, letterSpacing: -0.5 }}>GeoNews</span>
       </div>
 
+      {/* Auth button — top-right */}
+      <div style={{ position: 'absolute', top: 16, right: 16, zIndex: 20 }}>
+        {token ? (
+          <motion.button
+            whileTap={{ scale: 0.92 }}
+            onClick={handleLogout}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 7,
+              background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(12px)',
+              border: '1px solid rgba(255,255,255,0.1)',
+              borderRadius: 20, padding: '8px 14px', cursor: 'pointer', color: '#fff',
+              fontSize: 13, fontWeight: 600,
+            }}
+          >
+            <LogOut size={15} /> Sign out
+          </motion.button>
+        ) : (
+          <motion.button
+            whileTap={{ scale: 0.92 }}
+            onClick={() => setAuthOpen(true)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 7,
+              background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(12px)',
+              border: '1px solid rgba(255,255,255,0.1)',
+              borderRadius: 20, padding: '8px 14px', cursor: 'pointer', color: '#fff',
+              fontSize: 13, fontWeight: 600,
+            }}
+          >
+            <User size={15} /> Sign in
+          </motion.button>
+        )}
+      </div>
+
       {/* Bottom nav — centered */}
       <div style={{
         position: 'absolute', bottom: 32, left: '50%', transform: 'translateX(-50%)',
@@ -59,7 +111,7 @@ export default function App() {
 
         <motion.button
           whileTap={{ scale: 0.92 }}
-          onClick={() => setUploadOpen(true)}
+          onClick={() => token ? setUploadOpen(true) : setAuthOpen(true)}
           style={{
             display: 'flex', alignItems: 'center', gap: 8,
             background: '#3b82f6', border: 'none',
@@ -83,11 +135,18 @@ export default function App() {
         )}
       </AnimatePresence>
 
+      {/* Auth Modal */}
+      <AuthModal
+        open={authOpen}
+        onClose={() => setAuthOpen(false)}
+        onAuth={handleAuth}
+      />
+
       {/* Upload Modal — GPS-based news reporting */}
       <UploadModal
         open={uploadOpen}
         onClose={() => setUploadOpen(false)}
-        token={null}
+        token={token}
       />
 
       {/* Feed Drawer — scrollable news list */}
@@ -100,4 +159,3 @@ export default function App() {
     </div>
   )
 }
-
