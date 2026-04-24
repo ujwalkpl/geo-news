@@ -446,18 +446,8 @@ jobs:
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
       - uses: google-github-actions/setup-gcloud@v2
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-      - name: Build
-        working-directory: frontend
-        env:
-          VITE_API_URL: https://geonews-api-4loazyhcxa-uc.a.run.app
-          VITE_WS_URL:  wss://geonews-websocket-4loazyhcxa-uc.a.run.app/ws
-          VITE_MAPBOX_TOKEN: ${{ secrets.MAPBOX_TOKEN }}
-        run: npm ci && npm run build
-      - name: Deploy to Firebase Hosting
+      - name: Build & deploy via Cloud Build
         run: |
-          npm install -g firebase-tools
-          firebase deploy --only hosting --token "${{ secrets.FIREBASE_TOKEN }}" --non-interactive
-          echo "Frontend live: https://lab2-485303.web.app"
+          gcloud builds submit frontend/ \
+            --config frontend/cloudbuild.yaml \
+            --region $REGION
