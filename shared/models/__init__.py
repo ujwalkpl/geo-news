@@ -11,7 +11,9 @@ from .article import (
     ProcessedField,
 )
 from .events import LikeEvent, LikeEventType
-from .user import UserCreate, UserLogin, UserOut, TokenResponse
+
+# User models are NOT imported here — they require pydantic[email] (email-validator).
+# Import them directly where needed: from models.user import UserCreate, ...
 
 __all__ = [
     "RawArticle",
@@ -24,8 +26,4 @@ __all__ = [
     "ProcessedField",
     "LikeEvent",
     "LikeEventType",
-    "UserCreate",
-    "UserLogin",
-    "UserOut",
-    "TokenResponse",
 ]
