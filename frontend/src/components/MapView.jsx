@@ -1,8 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import mapboxgl from 'mapbox-gl'
 import { fetchMapArticles } from '../api/newsApi'
+import { useWebSocket } from '../hooks/useWebSocket'
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN
+
+const WS_URL = import.meta.env.VITE_WS_URL || null
 
 const CAT_COLORS = {
   Politics:      '#ef4444',
@@ -15,6 +18,14 @@ const CAT_COLORS = {
   General:       '#6b7280',
 }
 
+function articleColor(category) {
+  return CAT_COLORS[category] || '#6b7280'
+}
+
+/**
+ * Group articles by ~0.01° grid cell so nearby articles share a dot.
+ * Returns a Mapbox GeoJSON FeatureCollection.
+ */
 function toGeoJSON(articles) {
   const groups = {}
   articles.forEach(a => {
@@ -31,7 +42,7 @@ function toGeoJSON(articles) {
       geometry: { type: 'Point', coordinates: [group[0].lng, group[0].lat] },
       properties: {
         count: group.length,
-        color: CAT_COLORS[group[0].category] || '#6b7280',
+        color: articleColor(group[0].category),
         group: JSON.stringify(group),
       },
     })),
@@ -44,24 +55,61 @@ function getBbox(map) {
 }
 
 export default function MapView({ category, onArticleClick }) {
-  const containerRef = useRef(null)
-  const mapRef = useRef(null)
+  const containerRef  = useRef(null)
+  const mapRef        = useRef(null)
+  const articlesRef   = useRef([])   // master list — updated by both REST fetch and WS
   const onArticleClickRef = useRef(onArticleClick)
   onArticleClickRef.current = onArticleClick
 
-  // Fetch articles from API and update the map source
-  const loadArticles = async (map) => {
+  // ── Helpers ────────────────────────────────────────────────────────────────
+
+  function pushToMap(newArticles) {
+    const map = mapRef.current
+    if (!map) return
+    const source = map.getSource('articles')
+    if (!source) return
+
+    // Merge: deduplicate by article_id, new articles win
+    const existing = articlesRef.current
+    const existingIds = new Set(existing.map(a => a.article_id))
+    const merged = [
+      ...existing,
+      ...newArticles.filter(a => !existingIds.has(a.article_id)),
+    ]
+    articlesRef.current = merged
+    source.setData(toGeoJSON(merged))
+  }
+
+  async function loadArticles(map) {
     try {
       const bbox = getBbox(map)
       const articles = await fetchMapArticles({ bbox, category: category || 'all' })
+      // Replace viewport articles but keep any WS-injected articles outside viewport
+      const inViewIds = new Set(articles.map(a => a.article_id))
+      const outOfView = articlesRef.current.filter(a => !inViewIds.has(a.article_id))
+      articlesRef.current = [...articles, ...outOfView]
       const source = map.getSource('articles')
-      if (source) {
-        source.setData(toGeoJSON(articles))
-      }
+      if (source) source.setData(toGeoJSON(articlesRef.current))
     } catch (err) {
       console.error('Failed to load articles:', err)
     }
   }
+
+  // ── WebSocket: inject new articles as they arrive ─────────────────────────
+
+  useWebSocket(WS_URL, (msg) => {
+    if (msg.type !== 'new_article') return
+    const { article_id, lat, lng, category: cat, title, score, image_url } = msg
+    if (lat == null || lng == null) return
+
+    // Skip if category filter is active and doesn't match
+    if (category && category !== 'all' && cat !== category) return
+
+    console.log('[WS] new article:', title)
+    pushToMap([{ article_id, lat, lng, category: cat, title, score, image_url }])
+  })
+
+  // ── Map initialisation ────────────────────────────────────────────────────
 
   useEffect(() => {
     const map = new mapboxgl.Map({
@@ -91,10 +139,10 @@ export default function MapView({ category, onArticleClick }) {
         type: 'circle',
         source: 'articles',
         paint: {
-          'circle-radius': ['interpolate', ['linear'], ['get', 'count'], 1, 24, 10, 34],
-          'circle-color': ['get', 'color'],
+          'circle-radius':  ['interpolate', ['linear'], ['get', 'count'], 1, 24, 10, 34],
+          'circle-color':   ['get', 'color'],
           'circle-opacity': 0.2,
-          'circle-blur': 0.8,
+          'circle-blur':    0.8,
         },
       })
 
@@ -105,28 +153,28 @@ export default function MapView({ category, onArticleClick }) {
         source: 'articles',
         paint: {
           'circle-radius': ['interpolate', ['linear'], ['get', 'count'], 1, 13, 10, 21],
-          'circle-color': ['get', 'color'],
-          'circle-blur': 0.3,
+          'circle-color':  ['get', 'color'],
+          'circle-blur':   0.3,
         },
       })
 
-      // Count label for grouped dots
+      // Count badge for grouped dots
       map.addLayer({
         id: 'articles-label',
         type: 'symbol',
         source: 'articles',
         filter: ['>', ['get', 'count'], 1],
         layout: {
-          'text-field': ['to-string', ['get', 'count']],
-          'text-size': 11,
-          'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'],
-          'text-allow-overlap': true,
-          'text-ignore-placement': true,
+          'text-field':              ['to-string', ['get', 'count']],
+          'text-size':               11,
+          'text-font':               ['DIN Pro Bold', 'Arial Unicode MS Bold'],
+          'text-allow-overlap':      true,
+          'text-ignore-placement':   true,
         },
         paint: { 'text-color': '#ffffff' },
       })
 
-      // Click handler
+      // Click → open sidebar
       map.on('click', 'articles-dot', e => {
         if (!e.features.length) return
         const group = JSON.parse(e.features[0].properties.group)
@@ -135,7 +183,6 @@ export default function MapView({ category, onArticleClick }) {
       map.on('mouseenter', 'articles-dot', () => { map.getCanvas().style.cursor = 'pointer' })
       map.on('mouseleave', 'articles-dot', () => { map.getCanvas().style.cursor = '' })
 
-      // Initial load + reload on pan/zoom
       loadArticles(map)
       map.on('moveend', () => loadArticles(map))
     })
