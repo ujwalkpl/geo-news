@@ -83,7 +83,7 @@ export default function MapView({ category, onArticleClick }) {
   async function loadArticles(map) {
     try {
       const bbox = getBbox(map)
-      const articles = await fetchMapArticles({ bbox, category: category || 'all' })
+      const articles = await fetchMapArticles({ bbox, category: (!category || category === 'All') ? 'all' : category })
       // Replace viewport articles but keep any WS-injected articles outside viewport
       const inViewIds = new Set(articles.map(a => a.article_id))
       const outOfView = articlesRef.current.filter(a => !inViewIds.has(a.article_id))
@@ -103,7 +103,7 @@ export default function MapView({ category, onArticleClick }) {
     if (lat == null || lng == null) return
 
     // Skip if category filter is active and doesn't match
-    if (category && category !== 'all' && cat !== category) return
+    if (category && category !== 'all' && category !== 'All' && cat !== category) return
 
     console.log('[WS] new article:', title)
     pushToMap([{ article_id, lat, lng, category: cat, title, score, image_url }])

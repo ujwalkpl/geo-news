@@ -452,6 +452,7 @@ jobs:
           docker build frontend/ \
             --build-arg VITE_API_URL=https://geonews-api-4loazyhcxa-uc.a.run.app \
             --build-arg VITE_WS_URL=wss://geonews-websocket-4loazyhcxa-uc.a.run.app/ws \
+            --build-arg VITE_UPLOAD_URL=https://geonews-upload-4loazyhcxa-uc.a.run.app \
             --build-arg VITE_MAPBOX_TOKEN=${{ secrets.MAPBOX_TOKEN }} \
             -t $REGISTRY/frontend:${{ github.sha }} \
             -t $REGISTRY/frontend:latest
