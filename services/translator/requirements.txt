@@ -8,3 +8,4 @@ httpx==0.27.0
 tenacity==8.3.0
 # MarianMT requires sacremoses for some language pairs
 sacremoses==0.1.1
+python-dotenv==1.0.1
