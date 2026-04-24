@@ -19,7 +19,7 @@ async def get_pool() -> Pool:
     """Return the global asyncpg pool, initialising it on first call."""
     global _pool
     if _pool is None:
-        dsn = os.environ["DATABASE_URL"]
+        dsn = os.environ["POSTGRES_URL"]
         _pool = await asyncpg.create_pool(
             dsn=dsn,
             min_size=2,
