@@ -117,7 +117,8 @@ jobs:
             --region $REGION --platform managed \
             --no-allow-unauthenticated \
             --service-account $SA_EMAIL \
-            --set-secrets="KAFKA_BOOTSTRAP_SERVERS=KAFKA_BOOTSTRAP_SERVERS:latest,NEWSAPI_KEY=NEWSAPI_KEY:latest"
+            --vpc-connector $VPC_CONN \
+            --set-secrets="KAFKA_BOOTSTRAP_SERVERS=KAFKA_BOOTSTRAP_SERVERS:latest,NEWSAPI_KEY=NEWSAPI_KEY:latest,REDIS_URL=REDIS_URL:latest"
 
   # ── upload — signed URL generation + article confirm ───────────────────────
   deploy-upload:
