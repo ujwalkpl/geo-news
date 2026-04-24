@@ -446,8 +446,22 @@ jobs:
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
       - uses: google-github-actions/setup-gcloud@v2
-      - name: Build & deploy via Cloud Build
+      - run: gcloud auth configure-docker ${{ vars.GCP_REGION }}-docker.pkg.dev --quiet
+      - name: Build & push
         run: |
-          gcloud builds submit frontend/ \
-            --config frontend/cloudbuild.yaml \
-            --region $REGION
+          docker build frontend/ \
+            --build-arg VITE_API_URL=https://geonews-api-4loazyhcxa-uc.a.run.app \
+            --build-arg VITE_WS_URL=wss://geonews-websocket-4loazyhcxa-uc.a.run.app/ws \
+            --build-arg VITE_MAPBOX_TOKEN=${{ secrets.MAPBOX_TOKEN }} \
+            -t $REGISTRY/frontend:${{ github.sha }} \
+            -t $REGISTRY/frontend:latest
+          docker push $REGISTRY/frontend:${{ github.sha }}
+          docker push $REGISTRY/frontend:latest
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy geonews-frontend \
+            --image $REGISTRY/frontend:${{ github.sha }} \
+            --region $REGION --platform managed \
+            --allow-unauthenticated \
+            --min-instances 0 --max-instances 3 \
+            --service-account $SA_EMAIL
