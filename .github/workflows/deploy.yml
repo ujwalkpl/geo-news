@@ -1,34 +1,33 @@
 # ============================================================
 # GeoNews — GitHub Actions CI/CD
 #
-# DISABLED from auto-run: trigger is workflow_dispatch only.
-# To enable on push, change the `on:` block to:
+# Trigger: manual (workflow_dispatch) only.
+# To auto-deploy on push, change `on:` to:
 #   on:
 #     push:
 #       branches: [main]
 #
-# Required GitHub Secrets (Settings → Secrets → Actions):
-#   GCP_SA_KEY   — GCP service account JSON key with roles:
-#                    - roles/run.admin
-#                    - roles/artifactregistry.writer
-#                    - roles/iam.serviceAccountUser
-#   GCP_PROJECT  — your GCP project ID  (e.g. my-gcp-project)
+# GitHub Secrets required (Settings → Secrets → Actions):
+#   GCP_SA_KEY  — service account JSON key
+#   GCP_PROJECT — GCP project ID (lab2-485303)
 #
-# Required GitHub Variables (Settings → Variables → Actions):
-#   GCP_REGION   — Cloud Run region     (e.g. us-central1)
-#   GCP_REGISTRY — Artifact Registry URL
-#                  (e.g. us-central1-docker.pkg.dev/my-project/geonews)
+# GitHub Variables required (Settings → Variables → Actions):
+#   GCP_REGION   — us-central1
+#   GCP_REGISTRY — us-central1-docker.pkg.dev/lab2-485303/geonews
 # ============================================================
 
 name: Deploy GeoNews
 
 on:
-  workflow_dispatch:   # manual trigger only
+  workflow_dispatch:
 
 env:
-  REGISTRY: ${{ vars.GCP_REGISTRY }}
-  REGION:   ${{ vars.GCP_REGION }}
-  PROJECT:  ${{ secrets.GCP_PROJECT }}
+  REGISTRY:  ${{ vars.GCP_REGISTRY }}
+  REGION:    ${{ vars.GCP_REGION }}
+  PROJECT:   ${{ secrets.GCP_PROJECT }}
+  SA_EMAIL:  geonews-sa@${{ secrets.GCP_PROJECT }}.iam.gserviceaccount.com
+  SQL_INST:  ${{ secrets.GCP_PROJECT }}:us-central1:geonews-db
+  VPC_CONN:  projects/${{ secrets.GCP_PROJECT }}/locations/us-central1/connectors/geonews-connector
 
 jobs:
 
@@ -59,14 +58,11 @@ jobs:
           SERVICES="poller upload summarizer classifier translator aggregator like-consumer api websocket workers"
 
           if ! CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null) || [ -z "$CHANGED" ]; then
-            echo "No diff available — marking all services changed"
+            echo "No diff — marking all changed"
             for svc in $SERVICES; do echo "$svc=true" >> $GITHUB_OUTPUT; done
             exit 0
           fi
 
-          echo "Changed files: $CHANGED"
-
-          # If shared/ changed, rebuild every service
           if echo "$CHANGED" | grep -q "^shared/"; then
             echo "shared/ changed — rebuilding all"
             for svc in $SERVICES; do echo "$svc=true" >> $GITHUB_OUTPUT; done
@@ -81,8 +77,7 @@ jobs:
             fi
           done
 
-  # ── Deploy jobs (parallel, each gated by its changed flag) ─────────────────
-
+  # ── poller — fetches news from NewsAPI every 5 min via Cloud Scheduler ─────
   deploy-poller:
     name: Deploy poller
     needs: detect-changes
@@ -105,8 +100,12 @@ jobs:
         run: |
           gcloud run deploy geonews-poller \
             --image $REGISTRY/poller:${{ github.sha }} \
-            --region $REGION --platform managed --no-allow-unauthenticated
+            --region $REGION --platform managed \
+            --no-allow-unauthenticated \
+            --service-account $SA_EMAIL \
+            --set-secrets="KAFKA_BOOTSTRAP_SERVERS=KAFKA_BOOTSTRAP_SERVERS:latest,NEWSAPI_KEY=NEWSAPI_KEY:latest"
 
+  # ── upload — signed URL generation + article confirm ───────────────────────
   deploy-upload:
     name: Deploy upload
     needs: detect-changes
@@ -129,8 +128,13 @@ jobs:
         run: |
           gcloud run deploy geonews-upload \
             --image $REGISTRY/upload:${{ github.sha }} \
-            --region $REGION --platform managed --allow-unauthenticated
+            --region $REGION --platform managed \
+            --allow-unauthenticated \
+            --service-account $SA_EMAIL \
+            --vpc-connector $VPC_CONN \
+            --set-secrets="KAFKA_BOOTSTRAP_SERVERS=KAFKA_BOOTSTRAP_SERVERS:latest,REDIS_URL=REDIS_URL:latest,JWT_SECRET=JWT_SECRET:latest,GCS_BUCKET=GCS_BUCKET:latest,MAPBOX_TOKEN=MAPBOX_TOKEN:latest"
 
+  # ── summarizer — Gemini Flash summarisation ─────────────────────────────────
   deploy-summarizer:
     name: Deploy summarizer
     needs: detect-changes
@@ -153,9 +157,14 @@ jobs:
         run: |
           gcloud run deploy geonews-summarizer \
             --image $REGISTRY/summarizer:${{ github.sha }} \
-            --region $REGION --platform managed --no-allow-unauthenticated \
-            --min-instances 1 --max-instances 10
+            --region $REGION --platform managed \
+            --no-allow-unauthenticated \
+            --min-instances 1 --max-instances 10 \
+            --service-account $SA_EMAIL \
+            --vpc-connector $VPC_CONN \
+            --set-secrets="KAFKA_BOOTSTRAP_SERVERS=KAFKA_BOOTSTRAP_SERVERS:latest,REDIS_URL=REDIS_URL:latest,GEMINI_API_KEY=GEMINI_API_KEY:latest"
 
+  # ── classifier — spaCy NER + Mapbox geocoding ───────────────────────────────
   deploy-classifier:
     name: Deploy classifier
     needs: detect-changes
@@ -178,9 +187,14 @@ jobs:
         run: |
           gcloud run deploy geonews-classifier \
             --image $REGISTRY/classifier:${{ github.sha }} \
-            --region $REGION --platform managed --no-allow-unauthenticated \
-            --min-instances 1 --max-instances 10
+            --region $REGION --platform managed \
+            --no-allow-unauthenticated \
+            --min-instances 1 --max-instances 10 \
+            --service-account $SA_EMAIL \
+            --vpc-connector $VPC_CONN \
+            --set-secrets="KAFKA_BOOTSTRAP_SERVERS=KAFKA_BOOTSTRAP_SERVERS:latest,REDIS_URL=REDIS_URL:latest,MAPBOX_TOKEN=MAPBOX_TOKEN:latest"
 
+  # ── translator — MarianMT multilingual translation ──────────────────────────
   deploy-translator:
     name: Deploy translator
     needs: detect-changes
@@ -203,9 +217,15 @@ jobs:
         run: |
           gcloud run deploy geonews-translator \
             --image $REGISTRY/translator:${{ github.sha }} \
-            --region $REGION --platform managed --no-allow-unauthenticated \
-            --min-instances 1 --max-instances 10 --memory 2Gi --cpu 2
+            --region $REGION --platform managed \
+            --no-allow-unauthenticated \
+            --min-instances 1 --max-instances 10 \
+            --memory 2Gi --cpu 2 \
+            --service-account $SA_EMAIL \
+            --vpc-connector $VPC_CONN \
+            --set-secrets="KAFKA_BOOTSTRAP_SERVERS=KAFKA_BOOTSTRAP_SERVERS:latest,REDIS_URL=REDIS_URL:latest"
 
+  # ── aggregator — Redis join counter → Postgres flush → WS broadcast ─────────
   deploy-aggregator:
     name: Deploy aggregator
     needs: detect-changes
@@ -228,9 +248,15 @@ jobs:
         run: |
           gcloud run deploy geonews-aggregator \
             --image $REGISTRY/aggregator:${{ github.sha }} \
-            --region $REGION --platform managed --no-allow-unauthenticated \
-            --min-instances 1 --max-instances 5
+            --region $REGION --platform managed \
+            --no-allow-unauthenticated \
+            --min-instances 1 --max-instances 5 \
+            --service-account $SA_EMAIL \
+            --vpc-connector $VPC_CONN \
+            --add-cloudsql-instances $SQL_INST \
+            --set-secrets="KAFKA_BOOTSTRAP_SERVERS=KAFKA_BOOTSTRAP_SERVERS:latest,REDIS_URL=REDIS_URL:latest,POSTGRES_URL=POSTGRES_URL:latest"
 
+  # ── like-consumer — Kafka → Redis like/dislike counters ─────────────────────
   deploy-like-consumer:
     name: Deploy like-consumer
     needs: detect-changes
@@ -253,9 +279,14 @@ jobs:
         run: |
           gcloud run deploy geonews-like-consumer \
             --image $REGISTRY/like-consumer:${{ github.sha }} \
-            --region $REGION --platform managed --no-allow-unauthenticated \
-            --min-instances 1 --max-instances 5
+            --region $REGION --platform managed \
+            --no-allow-unauthenticated \
+            --min-instances 1 --max-instances 5 \
+            --service-account $SA_EMAIL \
+            --vpc-connector $VPC_CONN \
+            --set-secrets="KAFKA_BOOTSTRAP_SERVERS=KAFKA_BOOTSTRAP_SERVERS:latest,REDIS_URL=REDIS_URL:latest"
 
+  # ── api — FastAPI REST API (public) ─────────────────────────────────────────
   deploy-api:
     name: Deploy api
     needs: detect-changes
@@ -278,10 +309,15 @@ jobs:
         run: |
           gcloud run deploy geonews-api \
             --image $REGISTRY/api:${{ github.sha }} \
-            --region $REGION --platform managed --allow-unauthenticated \
+            --region $REGION --platform managed \
+            --allow-unauthenticated \
             --min-instances 1 --max-instances 20 --concurrency 100 \
-            --set-env-vars PROJECT_ID=$PROJECT
+            --service-account $SA_EMAIL \
+            --vpc-connector $VPC_CONN \
+            --add-cloudsql-instances $SQL_INST \
+            --set-secrets="POSTGRES_URL=POSTGRES_URL:latest,REDIS_URL=REDIS_URL:latest,KAFKA_BOOTSTRAP_SERVERS=KAFKA_BOOTSTRAP_SERVERS:latest,JWT_SECRET=JWT_SECRET:latest,ELASTICSEARCH_URL=ELASTICSEARCH_URL:latest"
 
+  # ── websocket — real-time article broadcast ──────────────────────────────────
   deploy-websocket:
     name: Deploy websocket
     needs: detect-changes
@@ -304,9 +340,15 @@ jobs:
         run: |
           gcloud run deploy geonews-websocket \
             --image $REGISTRY/websocket:${{ github.sha }} \
-            --region $REGION --platform managed --allow-unauthenticated \
-            --min-instances 1 --max-instances 10 --session-affinity
+            --region $REGION --platform managed \
+            --allow-unauthenticated \
+            --min-instances 1 --max-instances 10 \
+            --session-affinity \
+            --service-account $SA_EMAIL \
+            --vpc-connector $VPC_CONN \
+            --set-secrets="KAFKA_BOOTSTRAP_SERVERS=KAFKA_BOOTSTRAP_SERVERS:latest,REDIS_URL=REDIS_URL:latest"
 
+  # ── workers — score, flush, heatmap, DLQ retry ──────────────────────────────
   deploy-workers:
     name: Deploy workers
     needs: detect-changes
@@ -330,6 +372,11 @@ jobs:
           for w in score-worker flush-worker heatmap-worker dlq-retry-worker; do
             gcloud run deploy geonews-$w \
               --image $REGISTRY/workers:${{ github.sha }} \
-              --region $REGION --platform managed --no-allow-unauthenticated \
-              --min-instances 0 --max-instances 2
+              --region $REGION --platform managed \
+              --no-allow-unauthenticated \
+              --min-instances 0 --max-instances 2 \
+              --service-account $SA_EMAIL \
+              --vpc-connector $VPC_CONN \
+              --add-cloudsql-instances $SQL_INST \
+              --set-secrets="POSTGRES_URL=POSTGRES_URL:latest,REDIS_URL=REDIS_URL:latest,KAFKA_BOOTSTRAP_SERVERS=KAFKA_BOOTSTRAP_SERVERS:latest"
           done
