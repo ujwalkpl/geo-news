@@ -7,6 +7,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY shared/ /app/shared/
 COPY services/translator/requirements.txt .
+# Install CPU-only PyTorch first (avoids pulling the large CUDA build)
+RUN pip install --no-cache-dir \
+    torch==2.3.0+cpu \
+    --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Pre-download MarianMT models during build so there's no cold-start latency
