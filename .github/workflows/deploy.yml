@@ -331,10 +331,11 @@ jobs:
             --image $REGISTRY/api:${{ github.sha }} \
             --region $REGION --platform managed \
             --allow-unauthenticated \
-            --min-instances 1 --max-instances 20 --concurrency 100 \
+            --min-instances 1 --max-instances 5 --concurrency 50 \
             --service-account $SA_EMAIL \
             --vpc-connector $VPC_CONN \
             --add-cloudsql-instances $SQL_INST \
+            --set-env-vars="DB_POOL_MIN=2,DB_POOL_MAX=8" \
             --set-secrets="POSTGRES_URL=POSTGRES_URL:latest,REDIS_URL=REDIS_URL:latest,KAFKA_BOOTSTRAP_SERVERS=KAFKA_BOOTSTRAP_SERVERS:latest,JWT_SECRET=JWT_SECRET:latest,ELASTICSEARCH_URL=ELASTICSEARCH_URL:latest"
 
   # ── websocket — real-time article broadcast ──────────────────────────────────

@@ -16,19 +16,28 @@ _pool: Pool | None = None
 
 
 async def get_pool() -> Pool:
-    """Return the global asyncpg pool, initialising it on first call."""
+    """Return the global asyncpg pool, initialising it on first call.
+
+    Pool sizes are intentionally small — Cloud SQL db-f1-micro caps at ~25
+    total connections across all services. Override via env vars:
+      DB_POOL_MIN  (default 1)
+      DB_POOL_MAX  (default 3)
+    Set DB_POOL_MAX=10 on the API service which needs higher concurrency.
+    """
     global _pool
     if _pool is None:
         dsn = os.environ["POSTGRES_URL"]
+        min_size = int(os.environ.get("DB_POOL_MIN", "1"))
+        max_size = int(os.environ.get("DB_POOL_MAX", "3"))
         _pool = await asyncpg.create_pool(
             dsn=dsn,
-            min_size=2,
-            max_size=20,
+            min_size=min_size,
+            max_size=max_size,
             max_inactive_connection_lifetime=300,
             command_timeout=30,
-            statement_cache_size=100,
+            statement_cache_size=0,   # disabled — saves memory on small instances
         )
-        logger.info("asyncpg pool created (min=2, max=20)")
+        logger.info("asyncpg pool created (min=%d, max=%d)", min_size, max_size)
     return _pool
 
 
