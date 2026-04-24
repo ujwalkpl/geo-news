@@ -43,7 +43,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-GCS_BUCKET = os.environ["GCS_BUCKET_NAME"]
+GCS_BUCKET = os.environ.get("GCS_BUCKET") or os.environ.get("GCS_BUCKET_NAME")
 RAW_NEWS_TOPIC = "raw-news"
 GPS_ACCURACY_LIMIT_METRES = 100.0
 IP_GEO_TOLERANCE_KM = 200.0

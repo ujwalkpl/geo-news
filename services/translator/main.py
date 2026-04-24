@@ -142,7 +142,9 @@ class TranslatorService(BaseKafkaService):
     )
     def _translate_google(self, text: str, target: str) -> str:
         import httpx
-        api_key = os.environ["GOOGLE_TRANSLATE_API_KEY"]
+        api_key = os.environ.get("GOOGLE_TRANSLATE_API_KEY")
+        if not api_key:
+            raise RuntimeError("GOOGLE_TRANSLATE_API_KEY not configured — skipping fallback")
         resp = httpx.post(
             "https://translation.googleapis.com/language/translate/v2",
             params={"key": api_key},
