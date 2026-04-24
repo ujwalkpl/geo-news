@@ -10,10 +10,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import signal
 import sys
+import threading
 import time
 import uuid
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
 sys.path.insert(0, "/app/shared")
@@ -49,7 +52,17 @@ async def mark_failed(article_id_str: str) -> None:
         logger.error("Could not mark article failed: %s", exc)
 
 
+def _start_health_server() -> None:
+    class _H(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200); self.end_headers(); self.wfile.write(b"ok")
+        def log_message(self, *a): pass
+    port = int(os.environ.get("PORT", 8080))
+    threading.Thread(target=HTTPServer(("", port), _H).serve_forever, daemon=True).start()
+
+
 def main() -> None:
+    _start_health_server()
     producer = KafkaProducerClient()
     consumer = KafkaConsumerClient(
         topics=["failed-news"],

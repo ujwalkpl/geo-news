@@ -15,6 +15,8 @@ import logging
 import os
 import signal
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -64,7 +66,17 @@ async def handle_like_event(event: dict[str, Any]) -> None:
         logger.warning("Unknown like event type: %s", event_type)
 
 
+def _start_health_server() -> None:
+    class _H(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200); self.end_headers(); self.wfile.write(b"ok")
+        def log_message(self, *a): pass
+    port = int(os.environ.get("PORT", 8080))
+    threading.Thread(target=HTTPServer(("", port), _H).serve_forever, daemon=True).start()
+
+
 def main() -> None:
+    _start_health_server()
     producer = KafkaProducerClient()  # for DLQ
     consumer = KafkaConsumerClient(
         topics=["like-events"],

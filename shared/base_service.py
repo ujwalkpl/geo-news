@@ -18,12 +18,43 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import signal
+import threading
 from abc import ABC, abstractmethod
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
 from kafka.consumer import KafkaConsumerClient
 from kafka.producer import KafkaProducerClient
+
+
+# ── Cloud Run health-check server ─────────────────────────────────────────────
+
+class _HealthHandler(BaseHTTPRequestHandler):
+    """Minimal HTTP handler — returns 200 OK on any GET request."""
+
+    def do_GET(self) -> None:
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"ok")
+
+    def log_message(self, *args: object) -> None:
+        pass  # silence access logs
+
+
+def _start_health_server() -> None:
+    """Start a background HTTP server on $PORT (default 8080).
+
+    Cloud Run requires every container to listen on PORT — even pure
+    Kafka consumers that never serve real traffic.  This runs in a
+    daemon thread so it doesn't block the Kafka poll loop.
+    """
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("", port), _HealthHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    logging.getLogger("health").info("Health server listening on port %d", port)
 
 
 # ── Synchronous base ──────────────────────────────────────────────────────────
@@ -83,6 +114,7 @@ class BaseKafkaService(ABC):
 
     def start(self) -> None:
         """Start the blocking poll loop. Returns after SIGTERM / SIGINT."""
+        _start_health_server()
         self._running = True
         signal.signal(signal.SIGTERM, self._handle_shutdown)
         signal.signal(signal.SIGINT, self._handle_shutdown)
@@ -185,6 +217,7 @@ class AsyncBaseKafkaService(ABC):
 
     def start(self) -> None:
         """Start the blocking poll loop. Returns after SIGTERM / SIGINT."""
+        _start_health_server()
         self._running = True
         signal.signal(signal.SIGTERM, self._handle_shutdown)
         signal.signal(signal.SIGINT, self._handle_shutdown)
