@@ -8,7 +8,9 @@ from .jwt import (
     TokenData,
     TokenType,
 )
-from .password import hash_password, verify_password
+
+# password.py (passlib/bcrypt) is NOT imported here — only api and upload
+# need it. Import directly: from auth.password import hash_password, verify_password
 
 __all__ = [
     "create_access_token",
@@ -17,6 +19,4 @@ __all__ = [
     "verify_token",
     "TokenData",
     "TokenType",
-    "hash_password",
-    "verify_password",
 ]
