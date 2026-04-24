@@ -22,6 +22,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      force_deploy:
+        description: 'Force deploy all services (ignore diff)'
+        type: boolean
+        default: false
 
 env:
   REGISTRY:  ${{ vars.GCP_REGISTRY }}
@@ -58,6 +63,13 @@ jobs:
         id: diff
         run: |
           SERVICES="poller upload summarizer classifier translator aggregator like-consumer api websocket workers"
+
+          # Force flag: deploy everything regardless of diff
+          if [ "${{ github.event.inputs.force_deploy }}" = "true" ]; then
+            echo "Force deploy — marking all services changed"
+            for svc in $SERVICES; do echo "$svc=true" >> $GITHUB_OUTPUT; done
+            exit 0
+          fi
 
           if ! CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null) || [ -z "$CHANGED" ]; then
             echo "No diff — marking all changed"
