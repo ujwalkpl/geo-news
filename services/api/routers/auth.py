@@ -29,6 +29,9 @@ router = APIRouter()
 
 @router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
 async def register(body: UserCreate) -> UserOut:
+    if len(body.password.encode()) > 72:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="Password must be 72 characters or fewer")
     async with get_conn() as conn:
         existing = await UserQueries.get_by_email(conn, body.email)
         if existing:

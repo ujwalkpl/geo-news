@@ -136,7 +136,7 @@ export default function AuthModal({ open, onClose, onAuth }) {
                 <input
                   type="password" placeholder="Password" value={password}
                   onChange={e => setPassword(e.target.value)}
-                  required minLength={6}
+                  required minLength={6} maxLength={72}
                   style={inputStyle}
                 />
               </div>
