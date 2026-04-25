@@ -55,21 +55,46 @@ function getBbox(map) {
 }
 
 export default function MapView({ category, onArticleClick }) {
-  const containerRef  = useRef(null)
-  const mapRef        = useRef(null)
-  const articlesRef   = useRef([])   // master list — updated by both REST fetch and WS
+  const containerRef      = useRef(null)
+  const mapRef            = useRef(null)
+  const articlesRef       = useRef([])   // master list — updated by REST fetch and WS
   const onArticleClickRef = useRef(onArticleClick)
   onArticleClickRef.current = onArticleClick
 
-  // ── Helpers ────────────────────────────────────────────────────────────────
+  // Keep a ref so map event listeners always call the latest version of
+  // loadArticles (avoids stale closures over `category`).
+  const loadArticlesRef = useRef(null)
+
+  // ── Load articles for current viewport + category ─────────────────────────
+
+  loadArticlesRef.current = async function loadArticles(map) {
+    try {
+      const currentCat = (!category || category === 'All') ? 'all' : category
+      const bbox = getBbox(map)
+      const articles = await fetchMapArticles({ bbox, category: currentCat })
+
+      const inViewIds = new Set(articles.map(a => a.article_id))
+      // Keep WS-injected out-of-view articles, but only if they match the
+      // active category filter (prevents stale articles bleeding through).
+      const outOfView = articlesRef.current.filter(a =>
+        !inViewIds.has(a.article_id) &&
+        (currentCat === 'all' || a.category === category)
+      )
+      articlesRef.current = [...articles, ...outOfView]
+      const source = map.getSource('articles')
+      if (source) source.setData(toGeoJSON(articlesRef.current))
+    } catch (err) {
+      console.error('Failed to load articles:', err)
+    }
+  }
+
+  // ── Push a single new article (WebSocket) ─────────────────────────────────
 
   function pushToMap(newArticles) {
     const map = mapRef.current
     if (!map) return
     const source = map.getSource('articles')
     if (!source) return
-
-    // Merge: deduplicate by article_id, new articles win
     const existing = articlesRef.current
     const existingIds = new Set(existing.map(a => a.article_id))
     const merged = [
@@ -80,31 +105,13 @@ export default function MapView({ category, onArticleClick }) {
     source.setData(toGeoJSON(merged))
   }
 
-  async function loadArticles(map) {
-    try {
-      const bbox = getBbox(map)
-      const articles = await fetchMapArticles({ bbox, category: (!category || category === 'All') ? 'all' : category })
-      // Replace viewport articles but keep any WS-injected articles outside viewport
-      const inViewIds = new Set(articles.map(a => a.article_id))
-      const outOfView = articlesRef.current.filter(a => !inViewIds.has(a.article_id))
-      articlesRef.current = [...articles, ...outOfView]
-      const source = map.getSource('articles')
-      if (source) source.setData(toGeoJSON(articlesRef.current))
-    } catch (err) {
-      console.error('Failed to load articles:', err)
-    }
-  }
-
   // ── WebSocket: inject new articles as they arrive ─────────────────────────
 
   useWebSocket(WS_URL, (msg) => {
     if (msg.type !== 'new_article') return
     const { article_id, lat, lng, category: cat, title, score, image_url } = msg
     if (lat == null || lng == null) return
-
-    // Skip if category filter is active and doesn't match
     if (category && category !== 'all' && category !== 'All' && cat !== category) return
-
     console.log('[WS] new article:', title)
     pushToMap([{ article_id, lat, lng, category: cat, title, score, image_url }])
   })
@@ -174,7 +181,7 @@ export default function MapView({ category, onArticleClick }) {
         paint: { 'text-color': '#ffffff' },
       })
 
-      // Click → open sidebar
+      // Click → open snap viewer
       map.on('click', 'articles-dot', e => {
         if (!e.features.length) return
         const group = JSON.parse(e.features[0].properties.group)
@@ -183,8 +190,9 @@ export default function MapView({ category, onArticleClick }) {
       map.on('mouseenter', 'articles-dot', () => { map.getCanvas().style.cursor = 'pointer' })
       map.on('mouseleave', 'articles-dot', () => { map.getCanvas().style.cursor = '' })
 
-      loadArticles(map)
-      map.on('moveend', () => loadArticles(map))
+      // Use ref so moveend always calls the latest loadArticles (current category)
+      loadArticlesRef.current(map)
+      map.on('moveend', () => loadArticlesRef.current?.(map))
     })
 
     map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), 'bottom-right')
@@ -192,9 +200,10 @@ export default function MapView({ category, onArticleClick }) {
     return () => map.remove()
   }, [])
 
-  // Re-fetch when category filter changes
+  // Re-fetch when category filter changes — clear stale articles first
   useEffect(() => {
-    if (mapRef.current) loadArticles(mapRef.current)
+    articlesRef.current = []
+    if (mapRef.current) loadArticlesRef.current?.(mapRef.current)
   }, [category])
 
   return (
