@@ -5,8 +5,8 @@ A real-time geospatial news aggregator that plots news articles on an interactiv
 ## Prerequisites
 
 - Docker + Docker Compose
-- Node.js 18+
 - Python 3.11+
+- React 19
 
 ## Running local infrastructure
 
