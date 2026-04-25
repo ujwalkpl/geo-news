@@ -1,5 +1,7 @@
 # GeoNews
 
+**Live:** https://geonews-frontend-4loazyhcxa-uc.a.run.app
+
 Real-time geospatial news aggregator. Articles from NewsAPI and user reports are processed through an AI pipeline (summarization, classification, translation) and plotted as live dots on an interactive 3-D globe. Click any dot to read the story, filter by category, or report your own news with GPS.
 
 ## Architecture
